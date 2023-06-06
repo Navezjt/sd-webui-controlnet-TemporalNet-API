@@ -4,10 +4,9 @@ import numpy as np
 from modules import scripts, processing, shared
 from scripts import global_state
 from scripts.processor import preprocessor_sliders_config, model_free_preprocessors
-from scripts.logging import logger
-
+import pickle
 from modules.api import api
-
+import base64
 
 def get_api_version() -> int:
     return 2
@@ -32,15 +31,6 @@ class ResizeMode(Enum):
     INNER_FIT = "Crop and Resize"
     OUTER_FIT = "Resize and Fill"
 
-    def int_value(self):
-        if self == ResizeMode.RESIZE:
-            return 0
-        elif self == ResizeMode.INNER_FIT:
-            return 1
-        elif self == ResizeMode.OUTER_FIT:
-            return 2
-        assert False, "NOTREACHED"
-
 
 resize_mode_aliases = {
     'Inner Fit (Scale to Fit)': 'Crop and Resize',
@@ -54,14 +44,6 @@ def resize_mode_from_value(value: Union[str, int, ResizeMode]) -> ResizeMode:
     if isinstance(value, str):
         return ResizeMode(resize_mode_aliases.get(value, value))
     elif isinstance(value, int):
-        assert value >= 0
-        if value == 3: # 'Just Resize (Latent upscale)'
-            return ResizeMode.RESIZE
-        
-        if value >= len(ResizeMode):
-            logger.warning(f'Unrecognized ResizeMode int value {value}. Fall back to RESIZE.')
-            return ResizeMode.RESIZE
-
         return [e for e in ResizeMode][value]
     else:
         return value
@@ -74,67 +56,6 @@ def control_mode_from_value(value: Union[str, int, ControlMode]) -> ControlMode:
         return [e for e in ControlMode][value]
     else:
         return value
-
-
-def visualize_inpaint_mask(img):
-    if img.ndim == 3 and img.shape[2] == 4:
-        result = img.copy()
-        mask = result[:, :, 3]
-        mask = 255 - mask // 2
-        result[:, :, 3] = mask
-        return np.ascontiguousarray(result.copy())
-    return img
-
-
-def pixel_perfect_resolution(
-    image: np.ndarray,
-    target_H: int,
-    target_W: int,
-    resize_mode: ResizeMode,
-) -> int:
-    """
-    Calculate the estimated resolution for resizing an image while preserving aspect ratio.
-
-    The function first calculates scaling factors for height and width of the image based on the target 
-    height and width. Then, based on the chosen resize mode, it either takes the smaller or the larger 
-    scaling factor to estimate the new resolution.
-
-    If the resize mode is OUTER_FIT, the function uses the smaller scaling factor, ensuring the whole image 
-    fits within the target dimensions, potentially leaving some empty space. 
-
-    If the resize mode is not OUTER_FIT, the function uses the larger scaling factor, ensuring the target 
-    dimensions are fully filled, potentially cropping the image.
-
-    After calculating the estimated resolution, the function prints some debugging information.
-
-    Args:
-        image (np.ndarray): A 3D numpy array representing an image. The dimensions represent [height, width, channels].
-        target_H (int): The target height for the image.
-        target_W (int): The target width for the image.
-        resize_mode (ResizeMode): The mode for resizing.
-
-    Returns:
-        int: The estimated resolution after resizing.
-    """
-    raw_H, raw_W, _ = image.shape
-
-    k0 = float(target_H) / float(raw_H)
-    k1 = float(target_W) / float(raw_W)
-
-    if resize_mode == ResizeMode.OUTER_FIT:
-        estimation = min(k0, k1) * float(min(raw_H, raw_W))
-    else:
-        estimation = max(k0, k1) * float(min(raw_H, raw_W))
-    
-    logger.info(f"Pixel Perfect Computation:")
-    logger.info(f"resize_mode = {resize_mode}")
-    logger.info(f"raw_H = {raw_H}")
-    logger.info(f"raw_W = {raw_W}")
-    logger.info(f"target_H = {target_H}")
-    logger.info(f"target_W = {target_W}")
-    logger.info(f"estimation = {estimation}")
-
-    return int(np.round(estimation))
 
 
 InputImage = Union[np.ndarray, str]
@@ -155,9 +76,9 @@ class ControlNetUnit:
         image: Optional[InputImage]=None,
         resize_mode: Union[ResizeMode, int, str] = ResizeMode.INNER_FIT,
         low_vram: bool=False,
-        processor_res: int=-1,
-        threshold_a: float=-1,
-        threshold_b: float=-1,
+        processor_res: int=512,
+        threshold_a: float=64,
+        threshold_b: float=64,
         guidance_start: float=0.0,
         guidance_end: float=1.0,
         pixel_perfect: bool=False,
@@ -188,11 +109,19 @@ class ControlNetUnit:
 
 def to_base64_nparray(encoding: str):
     """
-    Convert a base64 image into the image type the extension uses
+    Convert a base64 image into the image type the extension uses.
+    If the image is a pickled 6-channel image, it's unpickled. 
+    Otherwise, it's assumed to be a 3-channel image and is handled with the original decoding process.
     """
+    try:
+        # Try to decode as a pickled 6-channel image
+        decoded = base64.b64decode(encoding)
+        image = pickle.loads(decoded)
+    except (pickle.UnpicklingError, TypeError, ValueError):
+        # If unpickling fails, try to decode as a 3-channel image
+        image = np.array(api.decode_base64_to_image(encoding)).astype('uint8')
 
-    return np.array(api.decode_base64_to_image(encoding)).astype('uint8')
-
+    return image
 
 def get_all_units_in_processing(p: processing.StableDiffusionProcessing) -> List[ControlNetUnit]:
     """
@@ -280,7 +209,7 @@ def to_processing_unit(unit: Union[Dict[str, Any], ControlNetUnit]) -> ControlNe
             unit['image'] = {'image': unit['image'], 'mask': mask} if mask is not None else unit['image'] if unit['image'] else None
 
         if 'guess_mode' in unit:
-            logger.warning('Guess Mode is removed since 1.1.136. Please use Control Mode instead.')
+            print('Guess Mode is removed since 1.1.136. Please use Control Mode instead.')
 
         unit = ControlNetUnit(**unit)
 

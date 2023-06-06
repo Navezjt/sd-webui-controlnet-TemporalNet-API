@@ -8,8 +8,7 @@ def HWC3(x):
         x = x[:, :, None]
     assert x.ndim == 3
     H, W, C = x.shape
-    assert C == 1 or C == 3 or C == 4
-    if C == 3:
+    if C == 3 or C == 6:
         return x
     if C == 1:
         return np.concatenate([x, x, x], axis=2)
