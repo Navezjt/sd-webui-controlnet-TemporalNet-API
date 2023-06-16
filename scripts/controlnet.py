@@ -44,6 +44,13 @@ try:
 except ImportError:
     pass
 
+
+# Gradio 3.32 bug fix
+import tempfile
+gradio_tempfile_path = os.path.join(tempfile.gettempdir(), 'gradio')
+os.makedirs(gradio_tempfile_path, exist_ok=True)
+
+
 def find_closest_lora_model_name(search: str):
     if not search:
         return None
@@ -227,7 +234,8 @@ class Script(scripts.Script):
                 if max_models > 1:
                     with gr.Tabs(elem_id=f"{elem_id_tabname}_tabs"):
                         for i in range(max_models):
-                            with gr.Tab(f"ControlNet Unit {i}"):
+                            with gr.Tab(f"ControlNet Unit {i}", 
+                                        elem_classes=['cnet-unit-tab']):
                                 controls += (self.uigroup(f"ControlNet-{i}", is_img2img, elem_id_tabname),)
                 else:
                     with gr.Column():
@@ -635,6 +643,8 @@ class Script(scripts.Script):
         sd_ldm = p.sd_model
         unet = sd_ldm.model.diffusion_model
 
+        setattr(p, 'controlnet_initial_noise_modifier', None)
+
         if self.latest_network is not None:
             # always restore (~0.05s)
             self.latest_network.restore(unet)
@@ -716,7 +726,7 @@ class Script(scripts.Script):
                 input_image = [np.asarray(x)[:, :, 0] for x in input_image]
                 input_image = np.stack(input_image, axis=2)
 
-            if 'inpaint_only' in unit.module and issubclass(type(p), StableDiffusionProcessingImg2Img) and p.image_mask is not None:
+            if 'inpaint_only' == unit.module and issubclass(type(p), StableDiffusionProcessingImg2Img) and p.image_mask is not None:
                 logger.warning('A1111 inpaint and ControlNet inpaint duplicated. ControlNet support enabled.')
                 unit.module = 'inpaint'
 
@@ -760,10 +770,27 @@ class Script(scripts.Script):
 
             logger.info(f"Loading preprocessor: {unit.module}")
             preprocessor = self.preprocessor[unit.module]
-            h, w, bsz = p.height, p.width, p.batch_size
 
-            h = (h // 8) * 8
-            w = (w // 8) * 8
+            high_res_fix = isinstance(p, StableDiffusionProcessingTxt2Img) and getattr(p, 'enable_hr', False)
+
+            h = (p.height // 8) * 8
+            w = (p.width // 8) * 8
+
+            if high_res_fix:
+                if p.hr_resize_x == 0 and p.hr_resize_y == 0:
+                    hr_y = int(p.height * p.hr_scale)
+                    hr_x = int(p.width * p.hr_scale)
+                else:
+                    hr_y, hr_x = p.hr_resize_y, p.hr_resize_x
+                hr_y = (hr_y // 8) * 8
+                hr_x = (hr_x // 8) * 8
+            else:
+                hr_y = h
+                hr_x = w
+
+            if unit.module == 'inpaint_only+lama' and resize_mode == external_code.ResizeMode.OUTER_FIT:
+                # inpaint_only+lama is special and required outpaint fix
+                _, input_image = Script.detectmap_proc(input_image, unit.module, resize_mode, hr_y, hr_x)
 
             preprocessor_resolution = unit.processor_res
             if unit.pixel_perfect:
@@ -783,16 +810,7 @@ class Script(scripts.Script):
                 detected_map = torch.Tensor(detected_map).to(devices.get_device_for("controlnet"))
                 is_image = False
 
-            if isinstance(p, StableDiffusionProcessingTxt2Img) and p.enable_hr:
-                if p.hr_resize_x == 0 and p.hr_resize_y == 0:
-                    hr_y = int(p.height * p.hr_scale)
-                    hr_x = int(p.width * p.hr_scale)
-                else:
-                    hr_y, hr_x = p.hr_resize_y, p.hr_resize_x
-
-                hr_y = (hr_y // 8) * 8
-                hr_x = (hr_x // 8) * 8
-
+            if high_res_fix:
                 if is_image:
                     hr_control, hr_detected_map = Script.detectmap_proc(detected_map, unit.module, resize_mode, hr_y, hr_x)
                     detected_maps.append((hr_detected_map, unit.module))
@@ -850,8 +868,7 @@ class Script(scripts.Script):
             )
             forward_params.append(forward_param)
 
-            if unit.module == 'inpaint_only':
-
+            if 'inpaint_only' in unit.module:
                 final_inpaint_feed = hr_control if hr_control is not None else control
                 final_inpaint_feed = final_inpaint_feed.detach().cpu().numpy()
                 final_inpaint_feed = np.ascontiguousarray(final_inpaint_feed).copy()
@@ -877,6 +894,9 @@ class Script(scripts.Script):
 
                 post_processors.append(inpaint_only_post_processing)
 
+            if '+lama' in unit.module:
+                forward_param.used_hint_cond_latent = hook.UnetHook.call_vae_using_process(p, control)
+                setattr(p, 'controlnet_initial_noise_modifier', forward_param.used_hint_cond_latent)
             del model_net
 
         self.latest_network = UnetHook(lowvram=hook_lowvram)
@@ -889,11 +909,15 @@ class Script(scripts.Script):
         for post_processor in self.post_processors:
             for i in range(images.shape[0]):
                 images[i] = post_processor(images[i])
-        self.post_processors = []
         return
 
     def postprocess(self, p, processed, *args):
+        self.post_processors = []
+        setattr(p, 'controlnet_initial_noise_modifier', None)
+        setattr(p, 'controlnet_vae_cache', None)
+
         processor_params_flag = (', '.join(getattr(processed, 'extra_generation_params', []))).lower()
+        self.post_processors = []
 
         if not batch_hijack.instance.is_batch:
             self.enabled_units.clear()

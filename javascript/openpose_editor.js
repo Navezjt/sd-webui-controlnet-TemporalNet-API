@@ -14,6 +14,38 @@ function loadOpenposeEditor() {
         target.dispatchEvent(e);
     }
 
+    function navigateIframe(iframe) {
+        function getPathname(rawURL) {
+            try {
+                return new URL(rawURL).pathname;
+            } catch (e) {
+                return rawURL;
+            }
+        }
+
+        return new Promise((resolve) => {
+            const EDITOR_PATH = '/openpose_editor_index';
+            const darkThemeParam = document.body.classList.contains('dark') ?
+                new URLSearchParams({ theme: 'dark' }).toString() :
+                '';
+
+            window.addEventListener('message', (event) => {
+                const message = event.data;
+                if (message['ready']) resolve();
+            }, { once: true });
+
+            if (getPathname(iframe.src) !== EDITOR_PATH) {
+                iframe.src = `${EDITOR_PATH}?${darkThemeParam}`;
+                // By default assume 1 second is enough for the openpose editor
+                // to load.
+                setTimeout(resolve, 1000);
+            } else {
+                // If no navigation is required, immediately return.
+                resolve();
+            }
+        });
+    }
+
     const imageRows = gradioApp().querySelectorAll('.cnet-image-row');
     imageRows.forEach(imageRow => {
         if (cnetOpenposeEditorRegisteredElements.has(imageRow)) return;
@@ -22,18 +54,23 @@ function loadOpenposeEditor() {
         const generatedImageGroup = imageRow.querySelector('.cnet-generated-image-group');
         const editButton = generatedImageGroup.querySelector('.cnet-edit-pose');
 
-        editButton.addEventListener('click', () => {
+        editButton.addEventListener('click', async () => {
             const inputImageGroup = imageRow.querySelector('.cnet-input-image-group');
             const inputImage = inputImageGroup.querySelector('.cnet-image img');
             const downloadLink = generatedImageGroup.querySelector('.cnet-download-pose a');
             const modalId = editButton.id.replace('cnet-modal-open-', '');
             const modalIframe = generatedImageGroup.querySelector('.cnet-modal iframe');
 
+            await navigateIframe(modalIframe);
             modalIframe.contentWindow.postMessage({
                 modalId,
                 imageURL: inputImage.src,
                 poseURL: downloadLink.href,
             }, '*');
+            // Focus the iframe so that the focus is no longer on the `Edit` button.
+            // Pressing space when the focus is on `Edit` button will trigger
+            // the click again to resend the frame message.
+            modalIframe.contentWindow.focus();
         });
 
         window.addEventListener('message', (event) => {
@@ -83,12 +120,10 @@ function loadPlaceHolder() {
                 <li><a href="https://github.com/huchenlei/sd-webui-openpose-editor">
                     huchenlei/sd-webui-openpose-editor</a></li>
             </ul>
-
-
         </div>
         `;
 
-        editButton.innerHTML = editButton.innerHTML + '⚠️';
+        editButton.innerHTML = '<del>' + editButton.innerHTML + '</del>';
     });
 }
 
