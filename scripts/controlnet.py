@@ -942,6 +942,10 @@ class Script(scripts.Script):
                         for detect_map, module in self.detected_map:
                             if detect_map is None:
                                 continue
+
+                            if detect_map.shape[2] == 6:
+                                continue
+
                             detect_map = np.ascontiguousarray(detect_map.copy()).copy()
                             detect_map = external_code.visualize_inpaint_mask(detect_map)
                             processed.images.extend([
