@@ -4,12 +4,10 @@ import numpy as np
 from modules import scripts, processing, shared
 from scripts import global_state
 from scripts.processor import preprocessor_sliders_config, model_free_preprocessors
-from scripts.logging import logger
-
+import pickle
 from modules.api import api
 import base64
 import pickle
-
 
 def get_api_version() -> int:
     return 2
@@ -33,15 +31,6 @@ class ResizeMode(Enum):
     RESIZE = "Just Resize"
     INNER_FIT = "Crop and Resize"
     OUTER_FIT = "Resize and Fill"
-
-    def int_value(self):
-        if self == ResizeMode.RESIZE:
-            return 0
-        elif self == ResizeMode.INNER_FIT:
-            return 1
-        elif self == ResizeMode.OUTER_FIT:
-            return 2
-        assert False, "NOTREACHED"
 
 
 resize_mode_aliases = {
@@ -76,7 +65,6 @@ def control_mode_from_value(value: Union[str, int, ControlMode]) -> ControlMode:
         return [e for e in ControlMode][value]
     else:
         return value
-
 
 def visualize_inpaint_mask(img):
     if img.ndim == 3 and img.shape[2] == 4:
@@ -157,9 +145,9 @@ class ControlNetUnit:
         image: Optional[InputImage]=None,
         resize_mode: Union[ResizeMode, int, str] = ResizeMode.INNER_FIT,
         low_vram: bool=False,
-        processor_res: int=-1,
-        threshold_a: float=-1,
-        threshold_b: float=-1,
+        processor_res: int=512,
+        threshold_a: float=64,
+        threshold_b: float=64,
         guidance_start: float=0.0,
         guidance_end: float=1.0,
         pixel_perfect: bool=False,
@@ -190,7 +178,9 @@ class ControlNetUnit:
 
 def to_base64_nparray(encoding: str):
     """
-    Convert a base64 image into the image type the extension uses
+    Convert a base64 image into the image type the extension uses.
+    If the image is a pickled 6-channel image, it's unpickled. 
+    Otherwise, it's assumed to be a 3-channel image and is handled with the original decoding process.
     """
     try:
         # Try to decode as a pickled 6-channel image
@@ -288,7 +278,7 @@ def to_processing_unit(unit: Union[Dict[str, Any], ControlNetUnit]) -> ControlNe
             unit['image'] = {'image': unit['image'], 'mask': mask} if mask is not None else unit['image'] if unit['image'] else None
 
         if 'guess_mode' in unit:
-            logger.warning('Guess Mode is removed since 1.1.136. Please use Control Mode instead.')
+            print('Guess Mode is removed since 1.1.136. Please use Control Mode instead.')
 
         unit = ControlNetUnit(**unit)
 
