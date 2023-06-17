@@ -7,6 +7,8 @@ from scripts.processor import preprocessor_sliders_config, model_free_preprocess
 from scripts.logging import logger
 
 from modules.api import api
+import base64
+import pickle
 
 
 def get_api_version() -> int:
@@ -57,7 +59,7 @@ def resize_mode_from_value(value: Union[str, int, ResizeMode]) -> ResizeMode:
         assert value >= 0
         if value == 3: # 'Just Resize (Latent upscale)'
             return ResizeMode.RESIZE
-        
+
         if value >= len(ResizeMode):
             logger.warning(f'Unrecognized ResizeMode int value {value}. Fall back to RESIZE.')
             return ResizeMode.RESIZE
@@ -95,14 +97,14 @@ def pixel_perfect_resolution(
     """
     Calculate the estimated resolution for resizing an image while preserving aspect ratio.
 
-    The function first calculates scaling factors for height and width of the image based on the target 
+    The function first calculates scaling factors for height and width of the image based on the target
     height and width. Then, based on the chosen resize mode, it either takes the smaller or the larger 
     scaling factor to estimate the new resolution.
 
-    If the resize mode is OUTER_FIT, the function uses the smaller scaling factor, ensuring the whole image 
+    If the resize mode is OUTER_FIT, the function uses the smaller scaling factor, ensuring the whole image
     fits within the target dimensions, potentially leaving some empty space. 
 
-    If the resize mode is not OUTER_FIT, the function uses the larger scaling factor, ensuring the target 
+    If the resize mode is not OUTER_FIT, the function uses the larger scaling factor, ensuring the target
     dimensions are fully filled, potentially cropping the image.
 
     After calculating the estimated resolution, the function prints some debugging information.
@@ -125,7 +127,7 @@ def pixel_perfect_resolution(
         estimation = min(k0, k1) * float(min(raw_H, raw_W))
     else:
         estimation = max(k0, k1) * float(min(raw_H, raw_W))
-    
+
     logger.info(f"Pixel Perfect Computation:")
     logger.info(f"resize_mode = {resize_mode}")
     logger.info(f"raw_H = {raw_H}")
@@ -190,9 +192,15 @@ def to_base64_nparray(encoding: str):
     """
     Convert a base64 image into the image type the extension uses
     """
+    try:
+        # Try to decode as a pickled 6-channel image
+        decoded = base64.b64decode(encoding)
+        image = pickle.loads(decoded)
+    except (pickle.UnpicklingError, TypeError, ValueError):
+        # If unpickling fails, try to decode as a 3-channel image
+        image = np.array(api.decode_base64_to_image(encoding)).astype('uint8')
 
-    return np.array(api.decode_base64_to_image(encoding)).astype('uint8')
-
+    return image
 
 def get_all_units_in_processing(p: processing.StableDiffusionProcessing) -> List[ControlNetUnit]:
     """

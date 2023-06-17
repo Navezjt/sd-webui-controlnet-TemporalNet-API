@@ -8,17 +8,18 @@ def HWC3(x):
         x = x[:, :, None]
     assert x.ndim == 3
     H, W, C = x.shape
-    assert C == 1 or C == 3 or C == 4
-    if C == 3:
-        return x
     if C == 1:
+        # Convert single channel image to 3 channel
         return np.concatenate([x, x, x], axis=2)
     if C == 4:
+        # Convert 4 channel image to 3
         color = x[:, :, 0:3].astype(np.float32)
         alpha = x[:, :, 3:4].astype(np.float32) / 255.0
         y = color * alpha + 255.0 * (1.0 - alpha)
         y = y.clip(0, 255).astype(np.uint8)
         return y
+    # Return everything else as is
+    return x
 
 
 def make_noise_disk(H, W, C, F):
